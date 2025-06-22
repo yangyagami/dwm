@@ -312,6 +312,9 @@ applyrules(Client *c)
 				c->mon = m;
 		}
 	}
+	/* if (strstr(c->name, "NoFocus")) { */
+	/* 	c->isfloating = 1; */
+	/* } */
 	if (ch.res_class)
 		XFree(ch.res_class);
 	if (ch.res_name)
@@ -595,6 +598,9 @@ configurerequest(XEvent *e)
 	XWindowChanges wc;
 
 	if ((c = wintoclient(ev->window))) {
+		/* printf("[Debug] mx: %d, my: %d, window: %s, x: %d, y: %d, w: %d, h: %d\n", */
+		/* 	c->mon->mx, c->mon->my, c->name, ev->x, ev->y, ev->width, ev->height); */
+
 		if (ev->value_mask & CWBorderWidth)
 			c->bw = ev->border_width;
 		else if (c->isfloating || !selmon->lt[selmon->sellt]->arrange) {
@@ -1094,7 +1100,9 @@ manage(Window w, XWindowAttributes *wa)
 	c->mon->sel = c;
 	arrange(c->mon);
 	XMapWindow(dpy, c->win);
-	focus(NULL);
+	if (!strstr(c->name, "NoFocus")) {
+		focus(NULL);
+	}
 }
 
 void
