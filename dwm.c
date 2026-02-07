@@ -82,6 +82,11 @@ typedef struct {
 	const Arg arg;
 } Button;
 
+typedef struct {
+	int x;
+	int y;
+} CursorPos;
+
 typedef struct Monitor Monitor;
 typedef struct Client Client;
 struct Client {
@@ -131,6 +136,8 @@ struct Monitor {
 	Monitor *next;
 	Window barwin;
 	const Layout *lt[2];
+	CursorPos cursor_pos;
+	int cursor_saved;
 };
 
 typedef struct {
@@ -840,14 +847,26 @@ void
 focusmon(const Arg *arg)
 {
 	Monitor *m;
+	int x, y;
 
 	if (!mons->next)
 		return;
 	if ((m = dirtomon(arg->i)) == selmon)
 		return;
+	
+	getrootptr(&x, &y);
+	selmon->cursor_pos.x = x;
+	selmon->cursor_pos.y = y;
+	selmon->cursor_saved = 1;
+	
 	unfocus(selmon->sel, 0);
 	selmon = m;
 	focus(NULL);
+	
+	if (selmon->cursor_saved)
+		XWarpPointer(dpy, None, root, 0, 0, 0, 0, selmon->cursor_pos.x, selmon->cursor_pos.y);
+	else
+		XWarpPointer(dpy, None, root, 0, 0, 0, 0, selmon->mx + selmon->mw / 2, selmon->my + selmon->mh / 2);
 }
 
 void
