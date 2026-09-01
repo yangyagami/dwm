@@ -1299,8 +1299,7 @@ propertynotify(XEvent *e)
 		}
 		if (ev->atom == XA_WM_NAME || ev->atom == netatom[NetWMName]) {
 			updatetitle(c);
-			if (c == c->mon->sel)
-				drawbar(c->mon);
+			drawbar(c->mon); /* 标题列表需刷新非焦点窗口的标题 */
 		}
 		if (ev->atom == netatom[NetWMWindowType])
 			updatewindowtype(c);

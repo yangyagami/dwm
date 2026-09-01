@@ -323,11 +323,19 @@ tabbed(Monitor *m)
 - 另：dwm 原生 ~MOD+space~ 只在 =lt[0]/=lt[1]= 两槽位间切换，
   不是循环；回 tile 用 ~MOD+t~。
 
-** Phase 3：打磨（R7）
+** Phase 3：打磨（R7）—— 已完成 ✅
 
 1. =propertynotify()= 改无条件 =drawbar(c->mon)=（非焦点窗口改标题也刷新）；
 2. urgent / 浮动标记按 Q6 定稿（保留 urgent 小方块）；
 3. =dwm.1= 手册补 tabbed 布局与列表说明。
+
+实施记录（2026-05-02，Xvnc 实测通过）：
+
+- =propertynotify()= 已改为无条件 =drawbar(c->mon)=，实测非焦点窗口
+  改名后 bar 标题列表即时更新；
+- urgent 小方块、浮动小方块已在 Phase 1 循环绘制中实现，无需改动；
+- =dwm.1=：描述段补 tabbed 布局语义（仅显示焦点窗口 + bar 标题列表
+  即标签）、新增 ~MOD+w~ 键位条目、状态栏一节说明标题列表。
 
 * 开放问题（需要决策 / 提问）
 
