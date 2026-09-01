@@ -31,7 +31,9 @@ z-order 覆盖，透明窗口会透出下层）。主 bar 标题区也只显示�
   不加 =buttons[]= 条目、不新建 X 窗口；
 - 主 bar 上已有的标题区直接复用，点击行为（~ClkWinTitle~ Button2 =
   zoom）原样保留；
-- 切换高亮完全走既有路径（=focus()→drawbars()=），不额外加代码。
+- 切换高亮完全走既有路径（=focus()→drawbars()=）；唯一新增的钩子是
+  =focus()= 末尾在 tabbed 布局下重新 =arrange()=（实现时发现
+  =focusstack= 不触发 =arrange=，见 Phase 2 踩坑 2）。
 
 * 现状分析（代码基础）
 
@@ -313,6 +315,11 @@ tabbed(Monitor *m)
   管理列表丢失。修正：改用 dwm 自身隐藏其它 tag 窗口的同款手段
   —— =XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y)= 移出屏幕，
   窗口保持映射状态，切布局时由 =showhide()/=resize()= 自动拉回。
+- **踩坑 2**：=focusstack= 只调 =focus()+=restack()=，不触发
+  =arrange()=，导致切焦点后 bar 高亮移了但屏幕显示的窗口不换。
+  修正：=focus()= 末尾加钩子 —— 当前布局为 tabbed 时重新
+  =arrange(selmon)=，覆盖所有焦点变化路径（=focusstack=、点击、
+  =zoom=、=killclient= 等）；
 - 另：dwm 原生 ~MOD+space~ 只在 =lt[0]/=lt[1]= 两槽位间切换，
   不是循环；回 tile 用 ~MOD+t~。
 
