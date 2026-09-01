@@ -217,6 +217,7 @@ static void showhide(Client *c);
 static void spawn(const Arg *arg);
 static void tag(const Arg *arg);
 static void tagmon(const Arg *arg);
+static void tabbed(Monitor *m);
 static void tile(Monitor *m);
 static void togglebar(const Arg *arg);
 static void togglefloating(const Arg *arg);
@@ -841,6 +842,10 @@ focus(Client *c)
 		XDeleteProperty(dpy, root, netatom[NetActiveWindow]);
 	}
 	selmon->sel = c;
+	/* tabbed 布局：焦点变化后需重新跑 arrange，把新焦点窗口换到屏上、
+	 * 旧焦点移出屏外（tabbed() 内的 show/hide 逻辑依赖 m->sel）。 */
+	if (selmon->lt[selmon->sellt]->arrange == tabbed)
+		arrange(selmon);
 	drawbars();
 }
 
@@ -1740,6 +1745,25 @@ tagmon(const Arg *arg)
 	if (!selmon->sel || !mons->next)
 		return;
 	sendmon(selmon->sel, dirtomon(arg->i));
+}
+
+void
+tabbed(Monitor *m)
+{
+	Client *c;
+
+	/* 布局符号 [TAB] 由 arrangemon() 从 layouts[] 自动置入 m->ltsymbol。
+	 * 同一时间只显示焦点窗口：其余移到屏幕外（WIDTH(c)*-2，与 showhide()
+	 * 隐藏其它 tag 窗口的手段一致）。不能 XUnmapWindow —— unmapnotify
+	 * 会触发 unmanage() 把客户端当退出删掉；而且窗口在屏幕外，透明
+	 * 窗口也不会透出下层。 */
+	for (c = nexttiled(m->clients); c; c = nexttiled(c->next)) {
+		resize(c, m->wx + m->gappx, m->wy + m->gappx,
+		       m->ww - 2 * c->bw - 2 * m->gappx,
+		       m->wh - 2 * c->bw - 2 * m->gappx, 0);
+		if (c != m->sel)
+			XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y);
+	}
 }
 
 void
