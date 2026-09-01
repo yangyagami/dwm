@@ -759,13 +759,24 @@ drawbar(Monitor *m)
 
 	if ((w = m->ww - tw - x) > bh) {
 		Client *t;
+		unsigned int total = 0;
+		int narrow;
+		/* 先按标题自然宽度算总和；超出了 tab 区域，则超过 tabw 的
+		 * tab 压到 tabw（标题截断），尽量多显示几个；仍放不下的
+		 * 走策略 A 丢弃。 */
+		for (t = m->clients; t; t = t->next)
+			if (ISVISIBLE(t))
+				total += TEXTW(t->name);
+		narrow = total > (unsigned int)(m->ww - tw - x);
 		for (t = m->clients; t && x < m->ww - tw; t = t->next) {
-			int tw2;
+			unsigned int tw2;
 			if (!ISVISIBLE(t))
 				continue;
 			tw2 = TEXTW(t->name);
+			if (narrow && tw2 > tabw)
+				tw2 = tabw;
 			if (x + tw2 > m->ww - tw)
-				break; /* 放不下：策略 A 直接截断 */
+				break; /* 仍放不下：策略 A 直接截断 */
 			drw_setscheme(drw, scheme[m == selmon && m->sel == t ? SchemeSel : SchemeNorm]);
 			drw_text(drw, x, 0, tw2, bh, lrpad / 2, t->name, 0);
 			if (t->isfloating)
@@ -1749,18 +1760,24 @@ tagmon(const Arg *arg)
 void
 tabbed(Monitor *m)
 {
-	Client *c;
+	Client *c, *t;
 
 	/* 布局符号 [TAB] 由 arrangemon() 从 layouts[] 自动置入 m->ltsymbol。
-	 * 同一时间只显示焦点窗口：其余移到屏幕外（WIDTH(c)*-2，与 showhide()
-	 * 隐藏其它 tag 窗口的手段一致）。不能 XUnmapWindow —— unmapnotify
-	 * 会触发 unmanage() 把客户端当退出删掉；而且窗口在屏幕外，透明
-	 * 窗口也不会透出下层。 */
+	 * 同一时间只显示一个平铺窗口：其余移到屏幕外（WIDTH(c)*-2，与
+	 * showhide() 隐藏其它 tag 窗口的手段一致）。不能 XUnmapWindow ——
+	 * unmapnotify 会触发 unmanage() 把客户端当退出删掉；而且窗口在
+	 * 屏幕外，透明窗口也不会透出下层。
+	 * 浮动窗口不参与 tabbed：保持在原有几何与层叠位置，浮在平铺层
+	 * 上方。焦点落在浮动窗口时，保持最近使用的平铺窗口继续显示，
+	 * 而不是把所有平铺窗口都藏掉。 */
+	t = (m->sel && !m->sel->isfloating) ? m->sel : NULL;
+	if (!t)
+		for (t = m->stack; t && (t->isfloating || !ISVISIBLE(t)); t = t->snext);
 	for (c = nexttiled(m->clients); c; c = nexttiled(c->next)) {
 		resize(c, m->wx + m->gappx, m->wy + m->gappx,
 		       m->ww - 2 * c->bw - 2 * m->gappx,
 		       m->wh - 2 * c->bw - 2 * m->gappx, 0);
-		if (c != m->sel)
+		if (c != t)
 			XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y);
 	}
 }
