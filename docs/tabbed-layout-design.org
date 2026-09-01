@@ -1,0 +1,332 @@
+#+TITLE: dwm tabbed 布局 + 主 bar 多标题显示 —— 设计方案（第二版）
+#+AUTHOR: yangsiyu
+#+DATE: <2026-05-02>
+#+OPTIONS: toc:2 num:t
+
+* 背景与目标
+
+dwm 目前没有 i3 风格的 tabbed 布局：多窗口时要么平铺（tile）、要么
+占满同一区域但看不到任何窗口标识（monocle 只显示数量 ~[%d]~，且用
+z-order 覆盖，透明窗口会透出下层）。主 bar 标题区也只显示焦点窗口
+==一个==标题。
+
+用户确认的最终需求（围绕两点）：
+
+1. ==tabbed 布局==：新增一个布局模式，当前工作区的可见窗口全部
+   **独占显示区**：同一时间只显示焦点窗口，其余**彻底隐藏**
+   =（XUnmapWindow，而非靠 z-order 盖住）=。选择"彻底隐藏"是因为
+   本机部分窗口透明（如透明背景的 kitty）：若只是叠在 z-order
+   后面，透过透明窗口会看到下层窗口 —— 用户明确不要。
+2. ==主 bar 多标题显示==：bar 标题区不新建任何东西，只是把"单个标题"
+   改成"当前工作区所有可见窗口的标题列表"，焦点窗口高亮；**纯显示，
+   无点击交互**。在 tabbed 布局下，这个标题列表天然就是它的"标签栏"。
+
+约束（沿用用户上一轮反馈）：
+
+- 不做任何 bar 点击功能：不加 =ClkTabBar= 枚举、不改 =buttonpress()=、
+  不加 =buttons[]= 条目、不新建 X 窗口；
+- 主 bar 上已有的标题区直接复用，点击行为（~ClkWinTitle~ Button2 =
+  zoom）原样保留；
+- 切换高亮完全走既有路径（=focus()→drawbars()=），不额外加代码。
+
+* 现状分析（代码基础）
+
+** 布局机制
+
+- =Layout= 结构（=dwm.c:117=）：=symbol= + =arrange(Monitor *)=。
+- =monocle()= =（=dwm.c:1150-1166=）=：所有可见客户端铺满
+  ~m->wx, my, ww, wh~，~ltsymbol~ 置 ~[%d]~。几何上 =tabbed()= 以它
+  为起点（保留 ~m->gappx~ 间隙，与本仓库 fullgaps 补丁一致），但显示
+  策略**不沿用 z-order**：monocle 是焦点在最上、其余仍然映射在下方，
+  透明窗口会透出下方窗口；=tabbed()= 改为 hide/show（见下文）。
+- 布局定义在 =config.h:71-76=，追加一项即可；=MOD+space= 循环布局
+  自动包含新布局。
+
+** 客户端管理
+
+- ~m->clients~ =（创建顺序）= / ~m->stack~ =（焦点历史）= 两条链；
+  =ISVISIBLE(C)= 判断是否属于当前 tagset；=nexttiled()= 过滤浮动。
+- "独占显示的窗口" = 当前 tagset 下可见且非浮动的客户端（=nexttiled=）；
+  "标题列表" = 当前 tagset 下所有可见客户端（=ISVISIBLE=，含浮动
+  窗口 —— Q3 已定）。
+
+** Bar 绘制（重点：标题区）
+
+=drawbar()= =（dwm.c:721-772）= 绘制顺序：status（仅 selmon）→ tag 区 →
+布局符号 =ltsymbol= → ==标题区== → ~drw_map()~。
+
+标题区现状（=dwm.c:760-771=）：
+
+#+BEGIN_SRC c
+	if ((w = m->ww - tw - x) > bh) {
+		if (m->sel) {
+			drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
+			drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
+			if (m->sel->isfloating)
+				drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
+		} else {
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_rect(drw, x, 0, w, bh, 1, 1);
+		}
+	}
+#+END_SRC
+
+其中 ~w = m->ww - tw - x~ 是标题区可用宽度（~tw~ 为 status 宽度）。
+这个块就是唯一要替换的绘制代码。
+
+** 焦点切换与刷新路径
+
+- =focus()= =（=dwm.c:821-851=）= 末尾 =drawbars()= =（=dwm.c:833=）=：
+  焦点一动，所有 monitor 的 bar 立即重画 → 高亮自动跟随。
+- =focusstack()/=zoom()/=killclient()/=tag()/=setlayout() 最终都串到
+  =focus()/arrange()/drawbar()= → 列表增删、高亮移动都不需要额外代码。
+- =propertynotify()= =（=dwm.c:1258-1282=）=：窗口标题变化重画所在
+  monitor 的 bar → 标题列表实时更新。
+
+* 需求清单
+
+- R1 tabbed 布局：可见（非浮动）客户端独占显示区 —— 只映射焦点窗口，
+  其余 =XUnmapWindow= 彻底隐藏；保留 =gappx= 间隙，布局符号 ~[TAB]~
+  =（用户指定，=config.h= 布局表 ={ "[TAB]", tabbed }=，由
+  =arrangemon()= 自动置入 ~ltsymbol~）=
+- R2 bar 标题区改为显示当前工作区所有可见窗口标题，一条一个，并排。
+- R3 高亮规则：焦点窗口 =SchemeSel=，其余 =SchemeNorm=；非 selmon
+  显示器全部 =SchemeNorm= =（与现状单标题逻辑一致）=。
+- R4 标题列表与独占显示的窗口一一对应：=tabbed()= 布局下，列表即标签栏。
+- R5 纯显示，无新增鼠标/键盘交互；=buttonpress()/=buttons[]/=wintomon()/
+  =updatebars()/=updatebarpos() 一律不改。
+- R6 刷新：焦点/tag/布局切换、窗口增删、标题修改时列表实时更新。
+- R7 溢出截断策略（Q4）、urgent 标记（Q6）。
+
+* 方案设计
+
+** 总体架构
+
+两个独立模块，靠既有刷新路径协作：
+
+1. =drawbar()= 标题区循环绘制（约 30 行，单函数内替换）；
+2. =tabbed()= 布局函数（约 20 行：几何仿 =monocle()=，显示策略改为
+   hide/show —— 只映射焦点窗口）+ =config.h= 布局表追加一项 +
+   可选键位绑定。
+
+互不依赖：标题列表在任何布局下都工作；=tabbed()= 布局在没有标题列表
+时也自洽（独占显示 + ~[TAB]~ 符号）。两者拼起来就是 i3 tabbed 的
+体感 —— 但要明确：**标签栏就是主 bar 的一部分，不可点击**。
+
+** drawbar() 标题区改造（=dwm.c:760-771= 整块替换）
+
+#+BEGIN_SRC c
+	/* 标题区：当前工作区所有可见窗口的标题，选中者高亮 */
+	if ((w = m->ww - tw - x) > bh) {
+		Client *c;
+		for (c = m->clients; c && x < m->ww - tw; c = c->next) {
+			int tw2;
+			if (!ISVISIBLE(c))
+				continue;
+			tw2 = TEXTW(c->name);
+			if (x + tw2 > m->ww - tw)          /* 剩余空间不足 */
+				break;                        /* 策略 A：直接截断（Q4） */
+			drw_setscheme(drw,
+				scheme[m == selmon && m->sel == c ? SchemeSel : SchemeNorm]);
+			drw_text(drw, x, 0, tw2, bh, lrpad / 2, c->name, 0);
+			if (c->isfloating)                /* 浮动小方块，逐条标注 */
+				drw_rect(drw, x + boxs, boxs, boxw, boxw, c->isfixed, 0);
+			if (c->isurgent)                  /* urgent 小方块（Q6） */
+				drw_rect(drw, x + boxs, boxs, boxw, boxw, 0, 1);
+			x += tw2;
+		}
+		if (x < m->ww - tw) {                 /* 剩余空白 */
+			drw_setscheme(drw, scheme[SchemeNorm]);
+			drw_rect(drw, x, 0, m->ww - tw - x, bh, 1, 1);
+		}
+	}
+#+END_SRC
+
+要点：
+- =ISVISIBLE(c)= 过滤：只显示当前工作区的窗口（含浮动，Q3）；
+- 高亮条件 ~m == selmon && m->sel == c~：与现状单标题逻辑逐条对齐；
+- 循环外圈 ~(w = m->ww - tw - x) > bh~ 保留：空间不足一条都画不下
+  时整块跳过，与今天行为一致。
+
+** 标签内容与顺序
+
+- 内容：~c->name~（=updatetitle()= 维护，=drw_text= 自带截断）；
+- 顺序：~m->clients~ =（头插链：新窗口在链头，遍历即新→旧）=，
+  恰与 =tile()/=tabbed()= 的窗口几何顺序（master→stack）一致。
+  不用 ~m->stack~（每次切焦点顺序会跳变）。Q5 已定。
+
+** 高亮规则
+
+| 场景                 | 配色                      |
+|----------------------+---------------------------|
+| selmon + 焦点窗口     | =SchemeSel=               |
+| selmon + 非焦点窗口   | =SchemeNorm=              |
+| 非 selmon 显示器      | 全部 =SchemeNorm=（同现状） |
+
+** tabbed() 布局函数
+
+#+BEGIN_SRC c
+void
+tabbed(Monitor *m)
+{
+	Client *c;
+
+	/* 布局符号 ~[TAB]~ 由 =arrangemon()= 从 =layouts[]= 自动置入
+	 * ~m->ltsymbol~，此处不再覆盖。 */
+	for (c = nexttiled(m->clients); c; c = nexttiled(c->next)) {
+		resize(c, m->wx + m->gappx, m->wy + m->gappx,
+		       m->ww - 2 * c->bw - 2 * m->gappx,
+		       m->wh - 2 * c->bw - 2 * m->gappx, 0);
+		/* 关键：同一时间只映射焦点窗口，其余 XUnmap 彻底隐藏 ——
+		 * 不靠 z-order 盖住，避免透明窗口透出下层窗口。 */
+		if (c == m->sel)
+			XMapRaised(dpy, c->win);
+		else
+			XUnmapWindow(dpy, c->win);
+	}
+}
+#+END_SRC
+
+- 显示策略：=XMapRaised(m->sel)=，其余 =XUnmapWindow= 彻底隐藏。
+  这只是布局内部的收敛；=arrange()= 前的 =showhide()= 负责 tag 级映射，
+  换 tag / 切布局时会重新映射全部窗口，不会永久丢窗口；
+- 只处理=非浮动=可见窗口（=nexttiled=），浮动窗口不参与隐藏，保持
+  既有浮动行为（可见、浮在顶层），与 i3 浮层语义一致；
+- 保留 =gappx= 间隙（与 tile 一致，尊重本仓库 fullgaps 补丁）；
+- 布局符号 ~[TAB]~（用户指定）：=config.h= 布局表写
+  ~{ "[TAB]", tabbed }~，=arrangemon()= 自动拷贝进 ~ltsymbol~，
+  =tabbed()= 内部不再覆盖；（对比 monocle 用 ~[%d]~ 显示数量）；
+- =config.h= 布局表追加：~{ "[TAB]", tabbed }~，条目序号为 3
+  （=layouts[3]=，供键位引用）。
+
+** 键位（=config.h= =keys[]=）
+
+现状（=config.h=）：~MOD+t~ → tile（=layouts[0]=）、~MOD+f~ → 浮动
+（=layouts[1]=）、~MOD+m~ → monocle、~MOD+space~ → 循环。
+
+**已定（Q2）**：~MOD+w~ → tabbed（=layouts[3]=）。~MOD+w~ 当前空闲，
+且与 i3 的 ~$mod+w~（切 tabbed 容器）习惯一致：
+
+#+BEGIN_SRC c
+{ MODKEY, XK_w, setlayout, {.v = &layouts[3]} },   /* tabbed */
+#+END_SRC
+
+其它既有绑定（=MOD+t/f/m=、=MOD+space= 等）全部保持不变。
+
+循环标签（=focusstack=）：~MOD+j/k~ 在 tabbed 布局下天然按窗口列表
+顺序循环焦点（所有独占显示的窗口都是"tiled"，=focusstack= 逐一命中），
+高亮随之在标题列表上移动 —— ==不需要新键==。=zoom()~（MOD+Shift+Return）=
+语义同 monocle：聚焦第一个独占显示的窗口。
+
+** 两者协同
+
+- tabbed 布局下：显示区只映射焦点窗口（其余 =XUnmap=，透明窗口也
+  不会透出下层），bar 标题列表列出所有窗口标题（可见标识 = "标签"），
+  焦点高亮 = "选中标签"。
+- 切出 tabbed（tile/浮动/monocle）：标题列表照常显示，只是不再有
+  "一个窗口盖住另一个"的语义 —— 列表变成纯粹的工作区概览。
+- =setlayout() 自动重画 bar → 列表配色随布局切换即时一致。
+
+** 刷新时机分析
+
+| 事件               | 路径                                    | 结果 |
+|--------------------+-----------------------------------------+------|
+| 焦点切换           | =focus()→drawbars()=                    | 高亮移动 |
+| tag 切换           | =view()→focus()/drawbar()=              | 列表增删 |
+| 窗口新建/销毁      | =manage()/unmanage()→arrange()=         | 列表增删 |
+| 标题修改           | =propertynotify()→drawbar(c->mon)=      | 文字更新 |
+| 布局切换           | =setlayout()→drawbar(selmon)=           | 独占/平铺切换 |
+
+** 明确不做的事
+
+- 不新建 ~ClkTabBar~ 点击枚举 / 不改 =buttonpress()= / 不加 =buttons[]=
+  —— 纯显示（用户明确要求）；
+- 不新建 =tabwin= X 窗口，不碰 =updatebars()/=updatebarpos()/=wintomon()=；
+- 不改 tile/浮动/monocle 现有排布与符号（monocle 的 ~[%d]~ 保留，Q8）；
+- =config.h= 只加布局表一项 + 可选键位，无其它配置。
+
+* 边界情况
+
+- 0 个窗口：~m->sel~ 为空 → 标题区走 =else= 画空白；=tabbed()= 无
+  窗口可映射，~ltsymbol~ 保持 ~[TAB]~（=arrangemon()= 置入）。
+- 1 个窗口：tabbed 退化为单窗口最大化（同 monocle 单窗口），列表
+  只显示一条并高亮，感知与今天一致。
+- 全屏窗口：=isfullscreen= 窗口仍在 ~m->clients~ 且可见，会出现在
+  标题列表；=setfullscreen()= 逻辑（铺满 ~m->mw/mh~）不依赖布局，
+  无需特殊处理。
+- 透明窗口：非焦点窗口已 =XUnmap=，透明窗口背后只有根窗口/壁纸，
+  不会透出其它窗口 —— 这正是选 hide 而非 z-order 的原因；
+- 浮动 + tabbed：浮动窗口不参与隐藏、浮在顶层；若其恰好是焦点
+  （=togglefloating= 后），高亮落到它的标题上，视觉合理。
+- 标题过长/窗口过多：=break= 截断，尾部空白（Q4：策略 A 已定）。
+- 多显示器：各显示器独立 ~m->clients~ 与布局；非焦点屏列表全
+  =SchemeNorm=（Q7 已定：保持现状）。
+
+* 实施计划
+
+改动文件：=dwm.c=（≈50 行）+ =config.h=（布局表 1 行 + 键位可选）。
+
+** Phase 0：基线
+
+~make clean && make~ 确认 HEAD（=fcd392f=）可编译；=git status= 干净。
+
+** Phase 1：bar 多标题显示（R2/R3/R5/R6 前半）—— 已完成 ✅
+
+1. 替换 =drawbar()= 标题区（=dwm.c:760-771=）为循环绘制；
+2. 编译验证：
+   - 开 2-3 个 kitty → 标题并排出现，焦点高亮跟随 ~MOD+j/k~；
+   - 换 tag / 新建 / 关闭 / 改标题 → 列表即时刷新。
+
+实施记录（2026-05-02，Xvnc 虚拟屏 ：1 实测通过）：
+
+- =dwm.c= 标题区已改为循环绘制（+18/-7 行），编译无警告；
+- 3 个 =xmessage= 窗口：bar 并排显示标题，最后 spawn 的（=m->clients=
+  链头 = tile master）高亮；
+- ~MOD+j~（XTEST 注入）切换焦点 → 高亮随焦点移动，边框同步；
+- =xdotool windowkill= 关闭窗口 → 对应 tab 消失，其余重排；
+- ~MOD+2~/~MOD+1~ 换 tag → 空工作区无标题、切回后列表恢复；
+- 3 个窗口 + status 放不下时，最早的标题被策略 A 截断（符合 Q4）。
+  注意：策略 A 会导致“窗口数减少后才能显示”的滞后，若实际使用
+  观感不佳，可升级策略 B（最后一个截断 + 省略标记）。
+
+** Phase 2：tabbed 布局（R1/R4）
+
+1. =config.h= 布局表追加 ~{ "[TAB]", tabbed }~（=layouts[3]=）；
+2. =dwm.c= 新增 =tabbed()= 函数 + 声明；
+3. 键位：~MOD+w~ → tabbed（=layouts[3]=）；
+4. 验证：~MOD+space~/~MOD+w~ 切入 → 同屏只显示焦点窗口、标题列表
+   即标签栏、~MOD+j/k~ 循环焦点且高亮移动；用透明 kitty 实测：切换
+   时不会透出其它窗口；浮动/全屏/gaps/多显示器兼容；切回 tile 后
+   所有窗口正常恢复显示（showhide 重映射）。
+
+** Phase 3：打磨（R7）
+
+1. =propertynotify()= 改无条件 =drawbar(c->mon)=（非焦点窗口改标题也刷新）；
+2. urgent / 浮动标记按 Q6 定稿（保留 urgent 小方块）；
+3. =dwm.1= 手册补 tabbed 布局与列表说明。
+
+* 开放问题（需要决策 / 提问）
+
+全部开放问题（Q1-Q8）已由用户拍板，本节保留决策记录：
+
+1. ~~是否需要堆叠排布~~ **已确认：需要**；且显示策略定为"仅映射焦点
+   窗口、其余彻底隐藏"（=XUnmapWindow=）—— 因部分窗口透明，用户
+   明确不要 z-order 覆盖方式。
+2. **键位** ~MOD+w~ → tabbed（=layouts[3]=，当前空闲，与 i3 ~$mod+w~
+   一致）；~MOD+t/f/m~、=MOD+space= 等既有绑定不变。
+3. **标题列表范围**：=ISVISIBLE=（含浮动窗口，如 Gimp、transient 弹窗）。
+4. **溢出策略**：策略 A —— 画不下的标题直接 =break= 截断。
+5. **列表顺序**：=m->clients=（创建顺序，与窗口排布一致）。
+6. **urgent 标记**：保留 urgent 小方块（同 tag 区样式 =dwm.c:750-754=）。
+7. **非 selmon 显示器**：保持现状 —— 列表全部 =SchemeNorm=，无独立高亮。
+8. **布局符号**：~[TAB]~（=config.h= 布局表 ~{ "[TAB]", tabbed }~；
+   =arrangemon()= 自动置入 ~ltsymbol~，=tabbed()= 内不再覆盖）。
+
+* 参考资料
+
+- dwm 源码（本仓库）：=dwm.c= 中 =drawbar()=（721-772）、=monocle()=
+  （1150-1166）、=focus()=（821-851）、=propertynotify()=（1258-1282）、
+  =arrangemon()=（403-409）；=config.h= 布局表（71-76）、键位表。
+- i3 User's Guide（tabbed 容器语义参考）：
+  =https://i3wm.org/docs/userguide.html#_tabbed_containers=
+- 本文第一版（独立 tab 栏 X 窗口 + 点击交互）已废弃，仅作修订记录参考。

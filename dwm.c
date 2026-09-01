@@ -757,14 +757,25 @@ drawbar(Monitor *m)
 	x = drw_text(drw, x, 0, w, bh, lrpad / 2, m->ltsymbol, 0);
 
 	if ((w = m->ww - tw - x) > bh) {
-		if (m->sel) {
-			drw_setscheme(drw, scheme[m == selmon ? SchemeSel : SchemeNorm]);
-			drw_text(drw, x, 0, w, bh, lrpad / 2, m->sel->name, 0);
-			if (m->sel->isfloating)
-				drw_rect(drw, x + boxs, boxs, boxw, boxw, m->sel->isfixed, 0);
-		} else {
+		Client *t;
+		for (t = m->clients; t && x < m->ww - tw; t = t->next) {
+			int tw2;
+			if (!ISVISIBLE(t))
+				continue;
+			tw2 = TEXTW(t->name);
+			if (x + tw2 > m->ww - tw)
+				break; /* 放不下：策略 A 直接截断 */
+			drw_setscheme(drw, scheme[m == selmon && m->sel == t ? SchemeSel : SchemeNorm]);
+			drw_text(drw, x, 0, tw2, bh, lrpad / 2, t->name, 0);
+			if (t->isfloating)
+				drw_rect(drw, x + boxs, boxs, boxw, boxw, t->isfixed, 0);
+			if (t->isurgent)
+				drw_rect(drw, x + boxs, boxs, boxw, boxw, 0, 1);
+			x += tw2;
+		}
+		if (x < m->ww - tw) { /* 剩余空白 */
 			drw_setscheme(drw, scheme[SchemeNorm]);
-			drw_rect(drw, x, 0, w, bh, 1, 1);
+			drw_rect(drw, x, 0, m->ww - tw - x, bh, 1, 1);
 		}
 	}
 	drw_map(drw, m->barwin, 0, 0, m->ww, bh);
