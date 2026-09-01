@@ -13,10 +13,14 @@ z-order 覆盖，透明窗口会透出下层）。主 bar 标题区也只显示�
 用户确认的最终需求（围绕两点）：
 
 1. ==tabbed 布局==：新增一个布局模式，当前工作区的可见窗口全部
-   **独占显示区**：同一时间只显示焦点窗口，其余**彻底隐藏**
-   =（XUnmapWindow，而非靠 z-order 盖住）=。选择"彻底隐藏"是因为
-   本机部分窗口透明（如透明背景的 kitty）：若只是叠在 z-order
+   **独占显示区**：同一时间只显示焦点窗口，其余**移出屏幕彻底隐藏**
+   =（XMoveWindow 移到 WIDTH(c)*-2，而非靠 z-order 盖住）=。选择"彻底隐藏"
+   是因为本机部分窗口透明（如透明背景的 kitty）：若只是叠在 z-order
    后面，透过透明窗口会看到下层窗口 —— 用户明确不要。
+   **实施修正**：最初用 =XUnmapWindow= 实现隐藏，但 dwm 的
+   =unmapnotify()= 会把被 unmap 的窗口当客户端退出（=unmanage=），
+   导致窗口从管理列表中丢失 —— 故改用 dwm 自身隐藏其它 tag 窗口的
+   同款手段（屏幕外移动，窗口保持映射状态）。
 2. ==主 bar 多标题显示==：bar 标题区不新建任何东西，只是把"单个标题"
    改成"当前工作区所有可见窗口的标题列表"，焦点窗口高亮；**纯显示，
    无点击交互**。在 tabbed 布局下，这个标题列表天然就是它的"标签栏"。
@@ -39,8 +43,9 @@ z-order 覆盖，透明窗口会透出下层）。主 bar 标题区也只显示�
   为起点（保留 ~m->gappx~ 间隙，与本仓库 fullgaps 补丁一致），但显示
   策略**不沿用 z-order**：monocle 是焦点在最上、其余仍然映射在下方，
   透明窗口会透出下方窗口；=tabbed()= 改为 hide/show（见下文）。
-- 布局定义在 =config.h:71-76=，追加一项即可；=MOD+space= 循环布局
-  自动包含新布局。
+- 布局定义在 =config.h:71-76=，追加一项即可。注意 dwm 原生
+  ~MOD+space~ 只在 =lt[0]/=lt[1]= 两个槽位间切换（非真正循环），
+  所以给 tabbed 单独绑了 ~MOD+w~，回 tile 用 ~MOD+t~。
 
 ** 客户端管理
 
@@ -86,7 +91,7 @@ z-order 覆盖，透明窗口会透出下层）。主 bar 标题区也只显示�
 * 需求清单
 
 - R1 tabbed 布局：可见（非浮动）客户端独占显示区 —— 只映射焦点窗口，
-  其余 =XUnmapWindow= 彻底隐藏；保留 =gappx= 间隙，布局符号 ~[TAB]~
+  其余移出屏幕彻底隐藏（=WIDTH(c)*-2=）；保留 =gappx= 间隙，布局符号 ~[TAB]~
   =（用户指定，=config.h= 布局表 ={ "[TAB]", tabbed }=，由
   =arrangemon()= 自动置入 ~ltsymbol~）=
 - R2 bar 标题区改为显示当前工作区所有可见窗口标题，一条一个，并排。
@@ -177,19 +182,19 @@ tabbed(Monitor *m)
 		resize(c, m->wx + m->gappx, m->wy + m->gappx,
 		       m->ww - 2 * c->bw - 2 * m->gappx,
 		       m->wh - 2 * c->bw - 2 * m->gappx, 0);
-		/* 关键：同一时间只映射焦点窗口，其余 XUnmap 彻底隐藏 ——
-		 * 不靠 z-order 盖住，避免透明窗口透出下层窗口。 */
-		if (c == m->sel)
-			XMapRaised(dpy, c->win);
-		else
-			XUnmapWindow(dpy, c->win);
+		/* 关键：同一时间只显示焦点窗口，其余移到屏幕外（与 showhide()
+		 * 隐藏其它 tag 窗口的手段一致）。不能 XUnmapWindow ——
+		 * unmapnotify 会触发 unmanage 把客户端当退出删掉。 */
+		if (c != m->sel)
+			XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y);
 	}
 }
 #+END_SRC
 
-- 显示策略：=XMapRaised(m->sel)=，其余 =XUnmapWindow= 彻底隐藏。
-  这只是布局内部的收敛；=arrange()= 前的 =showhide()= 负责 tag 级映射，
-  换 tag / 切布局时会重新映射全部窗口，不会永久丢窗口；
+- 显示策略：焦点窗口留在原位，其余 =XMoveWindow= 移到屏幕外
+  =（=WIDTH(c)*-2=，与 =showhide()= 隐藏其它 tag 窗口同款手段）。
+  切换布局/换 tag 时由 =arrange()= 的 =showhide()= + 新布局的
+  =resize()= 自动把全部窗口拉回屏幕，不会永久丢窗口；
 - 只处理=非浮动=可见窗口（=nexttiled=），浮动窗口不参与隐藏，保持
   既有浮动行为（可见、浮在顶层），与 i3 浮层语义一致；
 - 保留 =gappx= 间隙（与 tile 一致，尊重本仓库 fullgaps 补丁）；
@@ -202,7 +207,8 @@ tabbed(Monitor *m)
 ** 键位（=config.h= =keys[]=）
 
 现状（=config.h=）：~MOD+t~ → tile（=layouts[0]=）、~MOD+f~ → 浮动
-（=layouts[1]=）、~MOD+m~ → monocle、~MOD+space~ → 循环。
+（=layouts[1]=）、~MOD+m~ → monocle、~MOD+space~ → 在两个布局槽位间切换
+=dwm 原生行为，非循环=。
 
 **已定（Q2）**：~MOD+w~ → tabbed（=layouts[3]=）。~MOD+w~ 当前空闲，
 且与 i3 的 ~$mod+w~（切 tabbed 容器）习惯一致：
@@ -220,7 +226,7 @@ tabbed(Monitor *m)
 
 ** 两者协同
 
-- tabbed 布局下：显示区只映射焦点窗口（其余 =XUnmap=，透明窗口也
+- tabbed 布局下：显示区只有焦点窗口（其余在屏幕外，透明窗口也
   不会透出下层），bar 标题列表列出所有窗口标题（可见标识 = "标签"），
   焦点高亮 = "选中标签"。
 - 切出 tabbed（tile/浮动/monocle）：标题列表照常显示，只是不再有
@@ -254,7 +260,7 @@ tabbed(Monitor *m)
 - 全屏窗口：=isfullscreen= 窗口仍在 ~m->clients~ 且可见，会出现在
   标题列表；=setfullscreen()= 逻辑（铺满 ~m->mw/mh~）不依赖布局，
   无需特殊处理。
-- 透明窗口：非焦点窗口已 =XUnmap=，透明窗口背后只有根窗口/壁纸，
+- 透明窗口：非焦点窗口已移出屏幕，透明窗口背后只有根窗口/壁纸，
   不会透出其它窗口 —— 这正是选 hide 而非 z-order 的原因；
 - 浮动 + tabbed：浮动窗口不参与隐藏、浮在顶层；若其恰好是焦点
   （=togglefloating= 后），高亮落到它的标题上，视觉合理。
@@ -289,15 +295,26 @@ tabbed(Monitor *m)
   注意：策略 A 会导致“窗口数减少后才能显示”的滞后，若实际使用
   观感不佳，可升级策略 B（最后一个截断 + 省略标记）。
 
-** Phase 2：tabbed 布局（R1/R4）
+** Phase 2：tabbed 布局（R1/R4）—— 已完成 ✅
 
 1. =config.h= 布局表追加 ~{ "[TAB]", tabbed }~（=layouts[3]=）；
 2. =dwm.c= 新增 =tabbed()= 函数 + 声明；
 3. 键位：~MOD+w~ → tabbed（=layouts[3]=）；
-4. 验证：~MOD+space~/~MOD+w~ 切入 → 同屏只显示焦点窗口、标题列表
-   即标签栏、~MOD+j/k~ 循环焦点且高亮移动；用透明 kitty 实测：切换
-   时不会透出其它窗口；浮动/全屏/gaps/多显示器兼容；切回 tile 后
-   所有窗口正常恢复显示（showhide 重映射）。
+4. 验证（Xvnc :3 干净环境实测）：
+   - ~MOD+w~ 切入 → 同屏只显示焦点窗口，bar 显示 ~[TAB]~ + 全部
+     标题（焦点高亮）；
+   - ~MOD+j~ → 焦点切到下一个 tab：高亮移动，旧窗口完全不可见；
+   - ~MOD+t~ 切回 tile → 全部窗口恢复，焦点保持。
+
+实施记录（2026-05-02）：
+
+- **踩坑**：第一版用 =XUnmapWindow= 隐藏非焦点窗口，dwm 的
+  =unmapnotify()= 把它们当客户端退出（=unmanage=），窗口直接从
+  管理列表丢失。修正：改用 dwm 自身隐藏其它 tag 窗口的同款手段
+  —— =XMoveWindow(dpy, c->win, WIDTH(c) * -2, c->y)= 移出屏幕，
+  窗口保持映射状态，切布局时由 =showhide()/=resize()= 自动拉回。
+- 另：dwm 原生 ~MOD+space~ 只在 =lt[0]/=lt[1]= 两槽位间切换，
+  不是循环；回 tile 用 ~MOD+t~。
 
 ** Phase 3：打磨（R7）
 
@@ -310,7 +327,8 @@ tabbed(Monitor *m)
 全部开放问题（Q1-Q8）已由用户拍板，本节保留决策记录：
 
 1. ~~是否需要堆叠排布~~ **已确认：需要**；且显示策略定为"仅映射焦点
-   窗口、其余彻底隐藏"（=XUnmapWindow=）—— 因部分窗口透明，用户
+   窗口、其余彻底隐藏"（实现为屏幕外移动，=XUnmapWindow= 不可行，
+   会触发 =unmanage= 丢窗口）—— 因部分窗口透明，用户
    明确不要 z-order 覆盖方式。
 2. **键位** ~MOD+w~ → tabbed（=layouts[3]=，当前空闲，与 i3 ~$mod+w~
    一致）；~MOD+t/f/m~、=MOD+space= 等既有绑定不变。
